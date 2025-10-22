@@ -6,7 +6,7 @@
 
 import Airtable from 'airtable';
 import axios from 'axios';
-import cheerio from 'cheerio';
+import { load } from 'cheerio';
 import { Resolver } from 'dns';
 import { promisify } from 'util';
 
@@ -175,7 +175,7 @@ const makeAbs = (baseUrl, href) => { try { return new URL(href, baseUrl).toStrin
 async function extractContactsFromUrl(url) {
   const html = await getHtml(url);
   if (!html) return { emails: [], phones: [] };
-  const $ = cheerio.load(html);
+  const $ = load(html);
   const emails = new Set(); const phones = new Set();
   $('a[href^="mailto:"]').each((_, a) => { const m = ($(a).attr('href') || '').replace(/^mailto:/i,''); if (m) emails.add(m.trim()); });
   $('a[href^="tel:"]').each((_, a) => { const t = ($(a).attr('href') || '').replace(/^tel:/i,''); if (t) phones.add(t.trim()); });
@@ -197,7 +197,7 @@ async function discoverContacts(domain) {
   // a few internal links
   const homeHtml = await getHtml(baseUrl);
   if (homeHtml) {
-    const $ = cheerio.load(homeHtml);
+    const $ = load(homeHtml);
     const internal = new Set();
     $('a[href]').each((_, a) => {
       const abs = makeAbs(baseUrl, $(a).attr('href') || '');
