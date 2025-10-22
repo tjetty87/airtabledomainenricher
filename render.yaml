@@ -1,0 +1,9 @@
+services:
+  - type: cron
+    name: airtable-domain-enricher
+    env: node
+    schedule: "*/15 * * * *"
+    buildCommand: "npm ci"
+    startCommand: "node find-enrich.mjs"
+    autoDeploy: true
+    region: frankfurt
