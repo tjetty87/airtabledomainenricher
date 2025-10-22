@@ -6,7 +6,7 @@
     "build": "echo \"no build\"",
     "start": "node find-enrich.mjs"
   },
-  "engines": { "node": "18.x" },
+  "engines": { "node": "20.x" },
   "dependencies": {
     "airtable": "^0.12.2",
     "axios": "^1.7.7",
