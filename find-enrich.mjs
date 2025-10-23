@@ -62,11 +62,27 @@ async function httpAlive(domain) {
     `http://${domain}`,
     `http://www.${domain}`,
   ];
+
+  // First try HEAD (fast)
   for (const url of tries) {
     try {
-      const res = await axios.head(url, { timeout: 3500, maxRedirects: 2, validateStatus: () => true });
+      const res = await axios.head(url, { timeout: 4000, maxRedirects: 2, validateStatus: () => true });
       if (res.status > 0 && res.status < 600) return true;
-    } catch { /* try next */ }
+    } catch { /* continue */ }
+  }
+
+  // Fallback: small GET (some hosts block HEAD)
+  for (const url of tries) {
+    try {
+      const res = await axios.get(url, {
+        timeout: 8000,
+        maxRedirects: 2,
+        validateStatus: () => true,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; EnricherBot/1.0)', 'Accept': 'text/html,application/xhtml+xml' }
+      });
+      if (typeof res.data === 'string' && res.data.length > 100) return true;
+      if (res.status >= 200 && res.status < 400) return true;
+    } catch { /* continue */ }
   }
   return false;
 }
@@ -77,10 +93,14 @@ async function dnsAlive(domain) {
     return [a, aaaa, mx].some(r => r.status === 'fulfilled' && r.value && r.value.length);
   } catch { return false; }
 }
+
 async function verify(domain) {
   const [dnsOk, httpOk] = await Promise.all([dnsAlive(domain), httpAlive(domain)]);
   return { domain, dnsOk, httpOk, ok: dnsOk || httpOk };
-  function tokenizeCompany(name) {
+}
+
+// ---------- Brand-matching helpers ----------
+function tokenizeCompany(name) {
   const drop = new Set(['limited','ltd','plc','llp','inc','corp','corporation','company','group','holdings','services','uk','co','cic']);
   return (name || '')
     .toLowerCase()
@@ -102,14 +122,13 @@ function brandMatchScore(company, htmlText) {
   return hits / tokens.length; // 0..1
 }
 
-}
-
 // ---------- Domain candidate generation ----------
 function cleanName(raw) {
   const drop = ['limited','ltd','plc','llp','inc','corp','corporation','company','tech','technologies','technology','solutions','solution','group','holdings','services','consulting','consultancy','studio','labs','lab','digital','global','international','uk','co'];
   let s = (raw || '').toLowerCase().replace(/[.,/\\'"&()\[\]{}!@#$%^*?+:=]+/g, ' ').replace(/\s+/g, ' ').trim();
   return s.split(' ').filter(t => !drop.includes(t)).join(' ');
 }
+
 function variants(name) {
   const v = new Set([name, name.replace(/\s+/g,''), name.replace(/\s+/g,'-')]);
   const parts = name.split(' ').filter(Boolean);
@@ -122,6 +141,7 @@ function variants(name) {
   }
   return Array.from(v);
 }
+
 function tldsForCountry(country) {
   const common = ['.com', '.co.uk', '.co', '.ai', '.io', '.net', '.org', '.uk'];
   if (!country) return common;
@@ -131,6 +151,7 @@ function tldsForCountry(country) {
   }
   return common;
 }
+
 function score(domain) {
   let s = 0;
   if (domain.endsWith('.co.uk')) s += 6;
@@ -139,12 +160,15 @@ function score(domain) {
   if (domain.length <= 12) s += 1;
   return s;
 }
+
 async function bestDomainFor(name, country) {
   const cleaned = cleanName(name);
   if (!cleaned) return { candidates: [], pick: null };
+
   const cands = [];
   for (const n of variants(cleaned)) for (const t of tldsForCountry(country)) cands.push(`${n}${t}`);
   cands.sort((a,b)=>score(b)-score(a));
+
   const TOP = Math.min(40, cands.length);
   const checked = [];
   for (let i = 0; i < TOP; i += 5) {
@@ -165,6 +189,7 @@ async function bestDomainFor(name, country) {
 // ---------- Contact extraction ----------
 const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const PHONE_RE = /(?:(?:\+?44\s?\d{3,4}|\(?0\)?\s?\d{3,4})[\s-]?\d{3}[\s-]?\d{3,4}|\+?\d{1,3}[\s-]?\d{3,4}[\s-]?\d{3,4})/g;
+
 const normalizePhone = (p) => {
   if (!p) return '';
   let s = p.replace(/[^+\d]/g, '');
@@ -172,6 +197,23 @@ const normalizePhone = (p) => {
   if (s.startsWith('44') && !s.startsWith('+')) s = '+' + s;
   return s;
 };
+
+function isLikelyPhone(n) {
+  return /^\+?\d{10,15}$/.test(n); // 10..15 digits
+}
+
+function pickBestPhone(phones) {
+  const arr = (phones || []).map(normalizePhone).filter(isLikelyPhone);
+  if (!arr.length) return '';
+  const scored = arr.map(n => {
+    let s = 0;
+    if (/^\+44\d{9,11}$/.test(n)) s += 2;   // UK bias
+    if (n.length >= 11 && n.length <= 13) s += 0.5;
+    return { n, s };
+  }).sort((a,b)=>b.s-a.s);
+  return scored[0].n;
+}
+
 function pickBestEmail(emails, preferredDomain = '') {
   const arr = (emails || []).map(e => e.trim()).filter(Boolean);
   if (!arr.length) return '';
@@ -196,51 +238,97 @@ function pickBestEmail(emails, preferredDomain = '') {
   }).sort((a,b)=>b.s-a.s);
   return scored[0].e;
 }
-function isLikelyPhone(n) {
-  return /^\+?\d{10,15}$/.test(n); // 10..15 digits
-}
-function pickBestPhone(phones) {
-  const arr = (phones || []).map(normalizePhone).filter(isLikelyPhone);
-  if (!arr.length) return '';
-  const scored = arr.map(n => {
-    let s = 0;
-    if (/^\+44\d{9,11}$/.test(n)) s += 2;   // UK bias
-    if (n.length >= 11 && n.length <= 13) s += 0.5;
-    return { n, s };
-  }).sort((a,b)=>b.s-a.s);
-  return scored[0].n;
+
+// Cloudflare email deobfuscation
+function decodeCfEmail(hex) {
+  try {
+    const e = parseInt(hex.slice(0, 2), 16);
+    let email = '';
+    for (let n = 2; n < hex.length; n += 2) {
+      const charCode = parseInt(hex.slice(n, n + 2), 16) ^ e;
+      email += String.fromCharCode(charCode);
+    }
+    return email;
+  } catch { return ''; }
 }
 
 async function getHtml(url) {
   try {
-    const res = await axios.get(url, { timeout: 5000, maxRedirects: 3 });
+    const res = await axios.get(url, {
+      timeout: 8000,
+      maxRedirects: 3,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-GB,en;q=0.8'
+      }
+    });
     return typeof res.data === 'string' ? res.data : '';
-  } catch { return ''; }
+  } catch {
+    return '';
+  }
 }
+
 const makeAbs = (baseUrl, href) => { try { return new URL(href, baseUrl).toString(); } catch { return ''; } };
+
 async function extractContactsFromUrl(url) {
   const html = await getHtml(url);
   if (!html) return { emails: [], phones: [] };
   const $ = load(html);
-  const emails = new Set(); const phones = new Set();
-  $('a[href^="mailto:"]').each((_, a) => { const m = ($(a).attr('href') || '').replace(/^mailto:/i,''); if (m) emails.add(m.trim()); });
-  $('a[href^="tel:"]').each((_, a) => { const t = ($(a).attr('href') || '').replace(/^tel:/i,''); if (t) phones.add(t.trim()); });
+
+  const emails = new Set();
+  const phones = new Set();
+
+  // Standard mailto/tel
+  $('a[href^="mailto:"]').each((_, a) => {
+    const m = ($(a).attr('href') || '').replace(/^mailto:/i,'');
+    if (m) emails.add(m.trim());
+  });
+  $('a[href^="tel:"]').each((_, a) => {
+    const t = ($(a).attr('href') || '').replace(/^tel:/i,'');
+    if (t) phones.add(t.trim());
+  });
+
+  // Cloudflare obfuscation
+  $('[data-cfemail]').each((_, el) => {
+    const hex = $(el).attr('data-cfemail') || '';
+    const dec = decodeCfEmail(hex);
+    if (dec) emails.add(dec.trim());
+  });
+
+  // Common data-* attributes
+  $('[data-email]').each((_, el) => {
+    const m = ($(el).attr('data-email') || '').trim();
+    if (m) emails.add(m);
+  });
+
+  // Visible text scanning (last resort)
   const text = $.text();
   (text.match(EMAIL_RE) || []).forEach(e => emails.add(e));
   (text.match(PHONE_RE) || []).forEach(p => phones.add(p));
+
   return { emails: Array.from(emails), phones: Array.from(phones) };
 }
+
 async function discoverContacts(domain) {
   const baseUrl = `https://${domain}/`;
-  const seeds = ['','contact','contact-us','about','about-us','team'].map(p => makeAbs(baseUrl, p));
-  const seen = new Set(); const foundEmails = new Set(); const foundPhones = new Set();
+  const seeds = ['', 'contact', 'contact-us', 'contacts', 'about', 'about-us', 'team', 'imprint', 'legal', 'privacy']
+    .map(p => makeAbs(baseUrl, p));
+
+  const seen = new Set();
+  const foundEmails = new Set();
+  const foundPhones = new Set();
+
   for (const url of seeds) {
-    if (!url || seen.has(url)) continue; seen.add(url);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
     const { emails, phones } = await extractContactsFromUrl(url);
-    emails.forEach(e => foundEmails.add(e)); phones.forEach(p => foundPhones.add(p));
+    emails.forEach(e => foundEmails.add(e));
+    phones.forEach(p => foundPhones.add(p));
     await sleep(200);
   }
-  // a few internal links
+
+  // a few internal links from the homepage
   const homeHtml = await getHtml(baseUrl);
   if (homeHtml) {
     const $ = load(homeHtml);
@@ -252,20 +340,22 @@ async function discoverContacts(domain) {
     let count = 0;
     for (const u of internal) {
       if (count >= 3) break;
-      if (seen.has(u)) continue; seen.add(u);
+      if (seen.has(u)) continue;
+      seen.add(u);
       const { emails, phones } = await extractContactsFromUrl(u);
-      emails.forEach(e => foundEmails.add(e)); phones.forEach(p => foundPhones.add(p));
-      count++; await sleep(150);
+      emails.forEach(e => foundEmails.add(e));
+      phones.forEach(p => foundPhones.add(p));
+      count++;
+      await sleep(150);
     }
   }
-   const brandText = (homeHtml || '').toString();
+
+  const brandText = (homeHtml || '').toString();
   return {
-   
     email: pickBestEmail(Array.from(foundEmails), domain),
     phone: pickBestPhone(Array.from(foundPhones)),
     brandText
   };
-
 }
 
 // ---------- SIC → Industry (UK SIC 2007 section-level) ----------
@@ -292,6 +382,7 @@ const SIC_SECTIONS = [
   { range:[97,98],   name:'T — Activities of Households as Employers; Undifferentiated Goods- & Services-Producing Activities of Households for Own Use' },
   { range:[99,99],   name:'U — Activities of Extraterritorial Organisations & Bodies' }
 ];
+
 function lookupIndustryFromSICCode(sicCode) {
   if (!sicCode) return '';
   const two = parseInt(String(sicCode).trim().slice(0,2), 10);
@@ -299,6 +390,7 @@ function lookupIndustryFromSICCode(sicCode) {
   const match = SIC_SECTIONS.find(s => two >= s.range[0] && two <= s.range[1]);
   return match ? match.name : '';
 }
+
 function deriveIndustryFromSICField(sicFieldValue) {
   if (!sicFieldValue) return '';
   const values = Array.isArray(sicFieldValue) ? sicFieldValue : String(sicFieldValue).split(/[,;/\s]+/);
@@ -312,6 +404,7 @@ function deriveIndustryFromSICField(sicFieldValue) {
 
 // ---------- Airtable selection ----------
 function fieldBlank(field) { return `OR({${field}} = '', {${field}} = BLANK())`; }
+
 function needEnrichmentFilter() {
   const needDomain = fieldBlank(AIRTABLE_DOMAIN_FIELD);
   const needEmail  = fieldBlank(AIRTABLE_EMAIL_FIELD);
@@ -321,11 +414,11 @@ function needEnrichmentFilter() {
   let f = `OR(${needDomain}, ${needEmail}, ${needPhone}, ${needInd})`;
   if (filterRecentDays > 0) {
     const timeFn = useCreatedTime ? 'CREATED_TIME()' : 'LAST_MODIFIED_TIME()';
-    // Example: AND( <need fields>, IS_AFTER(LAST_MODIFIED_TIME(), DATEADD(TODAY(), -7, 'days')) )
     f = `AND(${f}, IS_AFTER(${timeFn}, DATEADD(TODAY(), -${filterRecentDays}, 'days')))`;
   }
   return f;
 }
+
 async function selectBatchNeedingEnrichment() {
   const page = await table.select({
     maxRecords: batchSize,
@@ -335,6 +428,7 @@ async function selectBatchNeedingEnrichment() {
   }).firstPage();
   return page;
 }
+
 function getField(rec, field) {
   const v = rec.get(field);
   if (!v) return '';
@@ -370,25 +464,20 @@ async function processRecord(rec) {
 
   // 2) Contacts
   if (domain && (!email || !phone)) {
-  console.log('  ˳ discovering contacts…');
-  const c = await discoverContacts(domain);
+    console.log('  ˳ discovering contacts…');
+    const c = await discoverContacts(domain);
 
-  // NEW: compute brand match
-  const bm = brandMatchScore(company, c.brandText || '');
-  const BRAND_OK = bm >= 0.4; // tweak 0.3–0.5 as you like
-  console.log(`  ˳ brand-match score: ${(bm*100).toFixed(0)}% ${BRAND_OK ? '(OK)' : '(weak)'}`);
+    let bm = 0;
+    if (typeof brandMatchScore === 'function') {
+      bm = brandMatchScore(company, c.brandText || '');
+    }
+    const BRAND_OK = bm >= 0.4; // tune 0.3–0.5
+    console.log(`  ˳ brand-match score: ${(bm*100).toFixed(0)}% ${BRAND_OK ? '(OK)' : '(weak)'}`);
 
-  if (!email && c.email) { email = c.email; console.log(`  ˳ email  → ${email}`); }
-  if (!phone && c.phone) { phone = c.phone; console.log(`  ˳ phone  → ${phone}`); }
-
-  // OPTIONAL: if brand match is weak, you can choose to not trust contacts yet.
-  // (Comment out if you prefer to keep them anyway.)
-  // if (!BRAND_OK) { email = email ? email : ''; phone = phone ? phone : ''; }
-  
-  // Store the flag on the record context so status logic can use it later
-  rec.__BRAND_OK = BRAND_OK;
-}
-
+    if (!email && c.email) { email = c.email; console.log(`  ˳ email  → ${email}`); }
+    if (!phone && c.phone) { phone = c.phone; console.log(`  ˳ phone  → ${phone}`); }
+    rec.__BRAND_OK = BRAND_OK;
+  }
 
   // 3) Industry from SIC
   if (!industry && sicRaw) {
@@ -398,18 +487,17 @@ async function processRecord(rec) {
 
   // Status
   if (!domain && !email && !phone) {
-  statusNote = 'No domain or contacts found';
-} else if (domain && !email && !phone) {
-  statusNote = 'Domain only';
-} else if (domain && (email || phone)) {
-  const brandOk = rec.__BRAND_OK;
-  statusNote = (typeof brandOk !== 'undefined' && brandOk === false)
-    ? 'Domain only (unverified brand match)'
-    : 'OK';
-} else {
-  statusNote = 'Partial';
-}
-
+    statusNote = 'No domain or contacts found';
+  } else if (domain && !email && !phone) {
+    statusNote = 'Domain only';
+  } else if (domain && (email || phone)) {
+    const brandOk = rec.__BRAND_OK;
+    statusNote = (typeof brandOk !== 'undefined' && brandOk === false)
+      ? 'Domain only (unverified brand match)'
+      : 'OK';
+  } else {
+    statusNote = 'Partial';
+  }
 
   // Write back
   const patch = {};
@@ -440,6 +528,7 @@ async function main() {
     await sleep(300);
   }
 }
+
 main().catch(e => {
   console.error('Fatal:', e?.response?.data || e);
   process.exit(1);
