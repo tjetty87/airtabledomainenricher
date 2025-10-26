@@ -421,8 +421,8 @@ function needEnrichmentFilter() {
 
 async function selectBatchNeedingEnrichment() {
   const page = await table.select({
-    maxRecords: batchSize,
-    pageSize: batchSize,
+   // maxRecords: batchSize,
+  //  pageSize: batchSize,
     filterByFormula: needEnrichmentFilter(),
     sort: [{ field: AIRTABLE_COMPANY_FIELD, direction: 'asc' }],
   }).firstPage();
