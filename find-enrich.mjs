@@ -509,6 +509,7 @@ async function processRecord(rec) {
   patch[AIRTABLE_LAST_ENRICHED_AT_FIELD]               = nowIso();
 
   if (DRY_RUN.toLowerCase() !== 'true') {
+    console.log('rec.id:',rec.id);
     await table.update(rec.id, patch);
     console.log('  ✍️  updated:', patch);
   } else {
