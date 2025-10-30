@@ -425,9 +425,19 @@ async function selectBatchNeedingEnrichment() {
   //  pageSize: batchSize,
     filterByFormula: needEnrichmentFilter(),
     sort: [{ field: AIRTABLE_COMPANY_FIELD, direction: 'asc' }],
-  }).firstPage((err, records) => {
-  console.log("total record length",records.length); // Max 100
-});
+  }).eachPage(
+  function page(records, fetchNextPage) {
+    allRecords.push(...records);
+    fetchNextPage(); // fetch the next page automatically
+  },
+  function done(err) {
+    if (err) {
+      console.error('❌ Error fetching records:', err);
+      return;
+    }
+    console.log('✅ Total records fetched:', allRecords.length);
+  }
+);
   return page;
 }
 
