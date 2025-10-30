@@ -531,6 +531,7 @@ async function processRecord(rec) {
 
 async function main() {
   const recs = await selectBatchNeedingEnrichment();
+  console.log("fetchrecs",recs);
   if (!recs.length) {
     console.log('✅ No records need enrichment.');
     return;
