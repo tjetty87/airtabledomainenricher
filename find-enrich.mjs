@@ -410,8 +410,8 @@ function needEnrichmentFilter() {
   const needEmail  = fieldBlank(AIRTABLE_EMAIL_FIELD);
   const needPhone  = fieldBlank(AIRTABLE_PHONE_FIELD);
   const needInd    = fieldBlank(AIRTABLE_INDUSTRY_FIELD);
-
-  let f = `OR(${needDomain}, ${needEmail}, ${needPhone}, ${needInd})`;
+  const needenrich = fieldBlank(AIRTABLE_STATUS_FIELD);
+  let f = needenrich;
   if (filterRecentDays > 0) {
     const timeFn = useCreatedTime ? 'CREATED_TIME()' : 'LAST_MODIFIED_TIME()';
     f = `AND(${f}, IS_AFTER(${timeFn}, DATEADD(TODAY(), -${filterRecentDays}, 'days')))`;
