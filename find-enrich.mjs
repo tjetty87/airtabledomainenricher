@@ -425,19 +425,7 @@ async function selectBatchNeedingEnrichment() {
   //  pageSize: batchSize,
     filterByFormula: needEnrichmentFilter(),
     sort: [{ field: AIRTABLE_COMPANY_FIELD, direction: 'asc' }],
-  }).eachPage(
-  function page(records, fetchNextPage) {
-    allRecords.push(...records);
-    fetchNextPage(); // fetch the next page automatically
-  },
-  function done(err) {
-    if (err) {
-      console.error('❌ Error fetching records:', err);
-      return;
-    }
-    console.log('✅ Total records fetched:', allRecords.length);
-  }
-);
+  }).all();
   return page;
 }
 
@@ -531,7 +519,7 @@ async function processRecord(rec) {
 
 async function main() {
   const recs = await selectBatchNeedingEnrichment();
-  console.log("fetchrecs",recs);
+  console.log("fetchrecs",recs?.length);
   if (!recs.length) {
     console.log('✅ No records need enrichment.');
     return;
